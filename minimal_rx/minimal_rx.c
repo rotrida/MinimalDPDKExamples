@@ -23,14 +23,14 @@
 #define BURST_SIZE 32
 
 void DumpHex(const void*, size_t);
-void rx_packets(void);
+void rx_packets(uint16_t portid);
 void exit_stats(int);
 
 uint64_t packet_count = 0;
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
-		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
+		.max_lro_pkt_size = RTE_ETHER_MAX_LEN,
 	},
 };
 
@@ -119,9 +119,9 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 }
 
 // recieve packets
-void rx_packets(void)
+void rx_packets(uint16_t portid)
 {
-	uint16_t port;
+	uint16_t port = portid;
 	int i;
 
 	printf("\nCore %u receiving packets. [Ctrl+C to quit]\n",
@@ -129,7 +129,7 @@ void rx_packets(void)
 
 	/* Run until the application is quit or killed. */
 	for (;;) {
-		RTE_ETH_FOREACH_DEV(port) {
+		//RTE_ETH_FOREACH_DEV(port) {
 
 			struct rte_mbuf *bufs[BURST_SIZE];
 			const uint16_t nb_rx = rte_eth_rx_burst(port, 0,
@@ -140,7 +140,7 @@ void rx_packets(void)
 
 			packet_count += nb_rx;
 
-			//printf("received %d packets:\n",nb_rx);
+			printf("received %d packets:\n",nb_rx);
 
 			for(i=0;i<nb_rx;++i){
 
@@ -152,7 +152,7 @@ void rx_packets(void)
 			}
 
 		}
-	}
+	//}
 }
 
 void exit_stats(int sig)
@@ -166,7 +166,7 @@ int main(int argc, char *argv[])
 {
 	struct rte_mempool *mbuf_pool;
 	unsigned nb_ports;
-	uint16_t portid;
+	uint16_t portid = 0;
 
 	/* Initialize the Environment Abstraction Layer (EAL). */
 	int ret = rte_eal_init(argc, argv);
@@ -179,21 +179,26 @@ int main(int argc, char *argv[])
 	nb_ports = rte_eth_dev_count_avail();
 	printf("rte_eth_dev_count_avail()=%d\n",nb_ports);
 
-	/* Creates a new mempool in memory to hold the mbufs. */
-	mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
-		MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+	const char *_MSG_POOL = "MSG_POOL";
+
+	/* Start of ring structure. 8< */
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY){
+		mbuf_pool = rte_pktmbuf_pool_create(_MSG_POOL, NUM_MBUFS, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+	} else {
+		mbuf_pool = rte_mempool_lookup(_MSG_POOL);
+	}
 
 	if (mbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
 	/* Initialize all ports. */
-	RTE_ETH_FOREACH_DEV(portid)
+	//RTE_ETH_FOREACH_DEV(portid)
 		if (port_init(portid, mbuf_pool) != 0)
 			rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n",
 					portid);
 
 	signal(SIGINT, exit_stats);
-	rx_packets();
+	rx_packets(portid);
 
 	return 0;
 }

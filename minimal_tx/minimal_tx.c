@@ -58,7 +58,7 @@ uint64_t DST_MAC;
 uint32_t IP_SRC_ADDR,IP_DST_ADDR;
 
 static const struct rte_eth_conf port_conf_default = {
-        .rxmode = { .max_rx_pkt_len = RTE_ETHER_MAX_LEN }
+        .rxmode = { .max_lro_pkt_size = RTE_ETHER_MAX_LEN }
 };
 
 static struct rte_ipv4_hdr  pkt_ip_hdr;  /**< IP header of transmitted packets. */
@@ -69,7 +69,7 @@ struct rte_mempool *mbuf_pool;
 
 uint32_t string_to_ip(char *);
 uint64_t string_to_mac(char *);
-static void send_packet(void);
+static void send_packet(uint16_t port);
 static void exit_stats(int);
 
 static uint64_t packet_count = 0;
@@ -160,7 +160,7 @@ static void setup_pkt_udp_ip_headers(struct rte_ipv4_hdr *ip_hdr,
 }
 
 // actually send the packet
-static void send_packet(void)
+static void send_packet(uint16_t port)
 {
 	struct rte_mbuf *pkt;
         union {
@@ -177,8 +177,8 @@ static void send_packet(void)
 	
         // set up addresses 
         dst_eth_addr.as_int=rte_cpu_to_be_64(DST_MAC);
-        rte_ether_addr_copy(&dst_eth_addr.as_addr,&eth_hdr.d_addr);
-        rte_ether_addr_copy(&my_addr, &eth_hdr.s_addr);
+        rte_ether_addr_copy(&dst_eth_addr.as_addr,&eth_hdr.dst_addr);
+        rte_ether_addr_copy(&my_addr, &eth_hdr.src_addr);
         eth_hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
 
 	// copy header to packet in mbuf
@@ -197,7 +197,7 @@ static void send_packet(void)
 
 	// Actually send the packet
 	pkts_burst[0] = pkt;
-        const uint16_t nb_tx = rte_eth_tx_burst(0, 0, pkts_burst, 1);
+        const uint16_t nb_tx = rte_eth_tx_burst(port, 0, pkts_burst, 1);
 	packet_count += nb_tx;
 	rte_mbuf_raw_free(pkt);
 }
@@ -219,9 +219,9 @@ port_init(uint16_t port)
                 return -1;
 
         rte_eth_dev_info_get(port, &dev_info);
-        if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+        if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
                 port_conf.txmode.offloads |=
-                        DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+                        RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 
         /* Configure the Ethernet device. */
         retval = rte_eth_dev_configure(port, rx_rings, tx_rings, &port_conf);
@@ -326,15 +326,23 @@ int main(int argc, char **argv)
         }
 
         /* Creates a new mempool in memory to hold the mbufs. */
-        mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS,
-                MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+        const char *_MSG_POOL = "MSG_POOL";
+
+	/* Start of ring structure. 8< */
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY){
+		mbuf_pool = rte_pktmbuf_pool_create(_MSG_POOL, NUM_MBUFS, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+	} else {
+		mbuf_pool = rte_mempool_lookup(_MSG_POOL);
+	}
 
         if (mbuf_pool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
+        uint16_t port = 1;
+
 	// initialize port 0
-	if (port_init(0) != 0)
-		rte_exit(EXIT_FAILURE, "Cannot init port 0\n");
+	if (port_init(port) != 0)
+		rte_exit(EXIT_FAILURE, "Cannot init port " PRIu16 "\n");
 
 
 	printf("Sending packets ... [Press Ctrl+C to exit]\n");
@@ -350,7 +358,7 @@ int main(int argc, char **argv)
 		if (counter % 35 == 0) {
 			usleep(1);
 		}
-		send_packet();
+		send_packet(port);
 	}
 
 	return(0);
